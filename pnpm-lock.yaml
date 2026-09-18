@@ -223,6 +223,15 @@ importers:
         specifier: 1.56.1
         version: 1.56.1
 
+  extensions/bridge:
+    dependencies:
+      '@cornerstonejs/core':
+        specifier: 5.10.3
+        version: 5.10.3(@cornerstonejs/metadata@5.10.3)(@cornerstonejs/utils@5.10.3)(autoprefixer@10.4.27(postcss@8.5.26))(wslink@2.5.0)
+      '@ohif/core':
+        specifier: workspace:*
+        version: link:../../platform/core
+
   extensions/cornerstone:
     dependencies:
       '@babel/runtime':
