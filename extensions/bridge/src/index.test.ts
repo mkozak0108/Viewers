@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Leave no watch running into the next test.
+  // The extension keeps its watch in module state, which outlives each test.
   bridgeExtension.onModeExit?.(hookParams);
 });
 

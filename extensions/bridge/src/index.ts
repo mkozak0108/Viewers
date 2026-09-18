@@ -3,9 +3,6 @@ import { Types } from '@ohif/core';
 import { id } from './id';
 import { watchStudy, type WatchStudyParams } from './watchStudy';
 
-// Tells apps/scoring-form, over window.postMessage, when the study named in
-// the viewer's address is on screen (studyLoaded). Message contract:
-// ./messages.ts.
 let stopWatching: (() => void) | undefined;
 
 const bridgeExtension: Types.Extensions.Extension = {

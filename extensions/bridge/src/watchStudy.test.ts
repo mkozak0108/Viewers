@@ -1,33 +1,41 @@
 import { Enums, eventTarget } from '@cornerstonejs/core';
 
+import {
+  BridgeEvent,
+  type BridgeEventMessage,
+  BridgeMessageType,
+  BridgeSource,
+  STUDY_UIDS_PARAM,
+  StudyLoadFailureReason,
+} from './messages';
 import { postToHost } from './postToHost';
 import { watchStudy } from './watchStudy';
 
 jest.mock('./postToHost');
-// Keeps test output quiet, and avoids loading all of @ohif/core.
+// Keeps test output quiet and avoids loading all of @ohif/core for one logger.
 jest.mock('@ohif/core', () => ({ log: { info: jest.fn(), warn: jest.fn() } }));
 
 const mockedPostToHost = postToHost as jest.MockedFunction<typeof postToHost>;
 
 const STUDY_UID = '1.2.3.4';
 
-const studyLoaded = {
-  source: 'spsoft-mvp-viewer',
-  type: 'event',
-  event: 'studyLoaded',
+const studyLoaded: BridgeEventMessage = {
+  source: BridgeSource.Viewer,
+  type: BridgeMessageType.Event,
+  event: BridgeEvent.StudyLoaded,
   payload: { StudyInstanceUID: STUDY_UID },
 };
 
-function studyLoadFailed(reason: string) {
+function studyLoadFailed(reason: StudyLoadFailureReason): BridgeEventMessage {
   return {
-    source: 'spsoft-mvp-viewer',
-    type: 'event',
-    event: 'studyLoadFailed',
+    source: BridgeSource.Viewer,
+    type: BridgeMessageType.Event,
+    event: BridgeEvent.StudyLoadFailed,
     payload: { StudyInstanceUID: STUDY_UID, reason },
   };
 }
 
-/** Lets the existence check's promise chain settle. */
+// A macrotask runs after every queued microtask, so the whole search promise chain has settled.
 function settle() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
@@ -49,7 +57,7 @@ function enable(element: HTMLElement) {
   eventTarget.dispatchEvent(new CustomEvent(Enums.Events.ELEMENT_ENABLED, { detail: { element } }));
 }
 
-function render(element: HTMLElement, viewportStatus: string) {
+function render(element: HTMLElement, viewportStatus: Enums.ViewportStatus) {
   element.dispatchEvent(
     new CustomEvent(Enums.Events.IMAGE_RENDERED, { detail: { element, viewportStatus } })
   );
@@ -57,8 +65,8 @@ function render(element: HTMLElement, viewportStatus: string) {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  window.history.replaceState({}, '', `/viewer?StudyInstanceUIDs=${STUDY_UID}`);
-  // A match: the existence check finds the study and posts nothing itself.
+  window.history.replaceState({}, '', `/viewer?${STUDY_UIDS_PARAM}=${STUDY_UID}`);
+  // By default the study exists, so the existence check stays silent.
   search = jest.fn().mockResolvedValue([{}]);
   stop = () => {};
 });
@@ -73,7 +81,7 @@ describe('watchStudy: first rendered image', () => {
     const element = document.createElement('div');
     enable(element);
 
-    render(element, 'preRender');
+    render(element, Enums.ViewportStatus.PRE_RENDER);
 
     expect(mockedPostToHost).not.toHaveBeenCalled();
   });
@@ -83,8 +91,8 @@ describe('watchStudy: first rendered image', () => {
     const element = document.createElement('div');
     enable(element);
 
-    render(element, 'preRender');
-    render(element, 'rendered');
+    render(element, Enums.ViewportStatus.PRE_RENDER);
+    render(element, Enums.ViewportStatus.RENDERED);
 
     expect(mockedPostToHost).toHaveBeenCalledTimes(1);
     expect(mockedPostToHost).toHaveBeenCalledWith(studyLoaded);
@@ -97,9 +105,9 @@ describe('watchStudy: first rendered image', () => {
     enable(first);
     enable(second);
 
-    render(first, 'rendered');
-    render(first, 'rendered');
-    render(second, 'rendered');
+    render(first, Enums.ViewportStatus.RENDERED);
+    render(first, Enums.ViewportStatus.RENDERED);
+    render(second, Enums.ViewportStatus.RENDERED);
 
     expect(mockedPostToHost).toHaveBeenCalledTimes(1);
   });
@@ -122,7 +130,7 @@ describe('watchStudy: first rendered image', () => {
     start();
     const element = document.createElement('div');
 
-    render(element, 'rendered');
+    render(element, Enums.ViewportStatus.RENDERED);
 
     expect(mockedPostToHost).not.toHaveBeenCalled();
   });
@@ -135,8 +143,8 @@ describe('watchStudy: first rendered image', () => {
     stop();
     const enabledAfter = document.createElement('div');
     enable(enabledAfter);
-    render(enabledBefore, 'rendered');
-    render(enabledAfter, 'rendered');
+    render(enabledBefore, Enums.ViewportStatus.RENDERED);
+    render(enabledAfter, Enums.ViewportStatus.RENDERED);
 
     expect(mockedPostToHost).not.toHaveBeenCalled();
   });
@@ -147,7 +155,7 @@ describe('watchStudy: first rendered image', () => {
     const element = document.createElement('div');
     enable(element);
 
-    render(element, 'rendered');
+    render(element, Enums.ViewportStatus.RENDERED);
     await settle();
 
     expect(mockedPostToHost).not.toHaveBeenCalled();
@@ -170,7 +178,7 @@ describe('watchStudy: existence check', () => {
     await settle();
 
     expect(mockedPostToHost).toHaveBeenCalledTimes(1);
-    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('notFound'));
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed(StudyLoadFailureReason.NotFound));
   });
 
   it('posts sourceUnreachable when the search rejects', async () => {
@@ -180,7 +188,9 @@ describe('watchStudy: existence check', () => {
     await settle();
 
     expect(mockedPostToHost).toHaveBeenCalledTimes(1);
-    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('sourceUnreachable'));
+    expect(mockedPostToHost).toHaveBeenCalledWith(
+      studyLoadFailed(StudyLoadFailureReason.SourceUnreachable)
+    );
   });
 
   it('posts sourceUnreachable when the search throws', async () => {
@@ -191,7 +201,9 @@ describe('watchStudy: existence check', () => {
 
     await settle();
 
-    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('sourceUnreachable'));
+    expect(mockedPostToHost).toHaveBeenCalledWith(
+      studyLoadFailed(StudyLoadFailureReason.SourceUnreachable)
+    );
   });
 
   it('posts nothing by itself when the study exists', async () => {
@@ -209,7 +221,7 @@ describe('watchStudy: existence check', () => {
     stop();
     await settle();
 
-    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('notFound'));
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed(StudyLoadFailureReason.NotFound));
   });
 
   it('posts no failure after studyLoaded was posted', async () => {
@@ -219,7 +231,7 @@ describe('watchStudy: existence check', () => {
     const element = document.createElement('div');
     enable(element);
 
-    render(element, 'rendered');
+    render(element, Enums.ViewportStatus.RENDERED);
     rejectSearch(new Error('Network Error'));
     await settle();
 
@@ -234,9 +246,9 @@ describe('watchStudy: existence check', () => {
     enable(element);
 
     await settle();
-    render(element, 'rendered');
+    render(element, Enums.ViewportStatus.RENDERED);
 
     expect(mockedPostToHost).toHaveBeenCalledTimes(1);
-    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('notFound'));
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed(StudyLoadFailureReason.NotFound));
   });
 });

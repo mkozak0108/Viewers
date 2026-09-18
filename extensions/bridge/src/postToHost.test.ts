@@ -1,10 +1,10 @@
-import type { BridgeEventMessage } from './messages';
-import { postToHost } from './postToHost';
+import { BridgeEvent, type BridgeEventMessage, BridgeMessageType, BridgeSource } from './messages';
+import { HostOrigin, postToHost } from './postToHost';
 
 const message: BridgeEventMessage = {
-  source: 'spsoft-mvp-viewer',
-  type: 'event',
-  event: 'studyLoaded',
+  source: BridgeSource.Viewer,
+  type: BridgeMessageType.Event,
+  event: BridgeEvent.StudyLoaded,
   payload: { StudyInstanceUID: '1.2.3.4' },
 };
 
@@ -34,8 +34,8 @@ describe('postToHost', () => {
     postToHost(message);
 
     expect(parent.postMessage).toHaveBeenCalledTimes(2);
-    expect(parent.postMessage).toHaveBeenCalledWith(message, 'http://localhost:5173');
-    expect(parent.postMessage).toHaveBeenCalledWith(message, 'http://localhost:4173');
+    expect(parent.postMessage).toHaveBeenCalledWith(message, HostOrigin.ScoringAppDev);
+    expect(parent.postMessage).toHaveBeenCalledWith(message, HostOrigin.ScoringAppPreview);
   });
 
   it('never posts to the wildcard origin', () => {

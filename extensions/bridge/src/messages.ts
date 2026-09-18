@@ -1,28 +1,42 @@
 /**
- * postMessage contract between this viewer (in the iframe) and the scoring
- * app (the host, in the parent window).
+ * The only copy of the postMessage contract between this viewer (in an iframe) and the scoring
+ * app (its parent window). The scoring app imports it as `@bridge-contract` through the
+ * submodule, so change it through a fork PR, then bump the submodule in the parent repo.
  *
- * This is the only copy of the bridge message contract. The scoring app
- * (parent repo) type-imports it as `@bridge-contract`. Change it through a
- * fork PR, then bump the submodule in the parent repo.
- *
- * Types only: no imports and no runtime code, because both this fork's babel
- * and the scoring app's `tsc` compile it.
+ * No imports: two toolchains compile this file, this fork's babel and the scoring app's Vite.
  */
 
-export type StudyLoadFailureReason = 'notFound' | 'sourceUnreachable';
+/** Both apps put the study in their address under this name, as OHIF's viewer route expects. */
+export const STUDY_UIDS_PARAM = 'StudyInstanceUIDs';
 
-/** Sent by the viewer iframe to the host app. */
+export enum BridgeSource {
+  Viewer = 'spsoft-mvp-viewer',
+}
+
+export enum BridgeMessageType {
+  Event = 'event',
+}
+
+export enum BridgeEvent {
+  StudyLoaded = 'studyLoaded',
+  StudyLoadFailed = 'studyLoadFailed',
+}
+
+export enum StudyLoadFailureReason {
+  NotFound = 'notFound',
+  SourceUnreachable = 'sourceUnreachable',
+}
+
 export type BridgeEventMessage =
   | {
-      source: 'spsoft-mvp-viewer';
-      type: 'event';
-      event: 'studyLoaded';
+      source: BridgeSource.Viewer;
+      type: BridgeMessageType.Event;
+      event: BridgeEvent.StudyLoaded;
       payload: { StudyInstanceUID: string };
     }
   | {
-      source: 'spsoft-mvp-viewer';
-      type: 'event';
-      event: 'studyLoadFailed';
+      source: BridgeSource.Viewer;
+      type: BridgeMessageType.Event;
+      event: BridgeEvent.StudyLoadFailed;
       payload: { StudyInstanceUID: string; reason: StudyLoadFailureReason };
     };
