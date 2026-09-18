@@ -63,6 +63,10 @@
       "version": "3.0.0"
     },
     {
+      "packageName": "@spsoft/extension-bridge",
+      "version": "0.1.0"
+    },
+    {
       "packageName": "@ohif/extension-ultrasound-pleura-bline",
       "version": "3.0.0"
     }
