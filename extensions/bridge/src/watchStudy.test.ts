@@ -16,6 +16,20 @@ const studyLoaded = {
   payload: { StudyInstanceUID: STUDY_UID },
 };
 
+function studyLoadFailed(reason: string) {
+  return {
+    source: 'spsoft-mvp-viewer',
+    type: 'event',
+    event: 'studyLoadFailed',
+    payload: { StudyInstanceUID: STUDY_UID, reason },
+  };
+}
+
+/** Lets the existence check's promise chain settle. */
+function settle() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
 function fakeExtensionManager(search: jest.Mock) {
   return {
     getActiveDataSource: () => [{ query: { studies: { search } } }],
@@ -125,14 +139,102 @@ describe('watchStudy: first rendered image', () => {
     expect(mockedPostToHost).not.toHaveBeenCalled();
   });
 
-  it('posts nothing when the page has no StudyInstanceUIDs', () => {
+  it('posts nothing when the page has no StudyInstanceUIDs', async () => {
     window.history.replaceState({}, '', '/viewer');
     start();
     const element = document.createElement('div');
     enable(element);
 
     render(element, 'rendered');
+    await settle();
 
     expect(mockedPostToHost).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+});
+
+describe('watchStudy: existence check', () => {
+  it('searches the active data source for the study, once', () => {
+    start();
+
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith({ studyInstanceUid: STUDY_UID });
+  });
+
+  it('posts notFound when the search finds no study', async () => {
+    search.mockResolvedValue([]);
+    start();
+
+    await settle();
+
+    expect(mockedPostToHost).toHaveBeenCalledTimes(1);
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('notFound'));
+  });
+
+  it('posts sourceUnreachable when the search rejects', async () => {
+    search.mockRejectedValue(new Error('Network Error'));
+    start();
+
+    await settle();
+
+    expect(mockedPostToHost).toHaveBeenCalledTimes(1);
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('sourceUnreachable'));
+  });
+
+  it('posts sourceUnreachable when the search throws', async () => {
+    search.mockImplementation(() => {
+      throw new Error('no data source');
+    });
+    start();
+
+    await settle();
+
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('sourceUnreachable'));
+  });
+
+  it('posts nothing by itself when the study exists', async () => {
+    start();
+
+    await settle();
+
+    expect(mockedPostToHost).not.toHaveBeenCalled();
+  });
+
+  it('still posts the failure after stop(), since OHIF leaves the mode on a missing study', async () => {
+    search.mockResolvedValue([]);
+    start();
+
+    stop();
+    await settle();
+
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('notFound'));
+  });
+
+  it('posts no failure after studyLoaded was posted', async () => {
+    let rejectSearch: (error: Error) => void = () => {};
+    search.mockReturnValue(new Promise((_resolve, reject) => (rejectSearch = reject)));
+    start();
+    const element = document.createElement('div');
+    enable(element);
+
+    render(element, 'rendered');
+    rejectSearch(new Error('Network Error'));
+    await settle();
+
+    expect(mockedPostToHost).toHaveBeenCalledTimes(1);
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoaded);
+  });
+
+  it('posts no studyLoaded after a failure was posted', async () => {
+    search.mockResolvedValue([]);
+    start();
+    const element = document.createElement('div');
+    enable(element);
+
+    await settle();
+    render(element, 'rendered');
+
+    expect(mockedPostToHost).toHaveBeenCalledTimes(1);
+    expect(mockedPostToHost).toHaveBeenCalledWith(studyLoadFailed('notFound'));
   });
 });
