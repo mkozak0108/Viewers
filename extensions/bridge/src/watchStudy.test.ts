@@ -4,6 +4,8 @@ import { postToHost } from './postToHost';
 import { watchStudy } from './watchStudy';
 
 jest.mock('./postToHost');
+// Keeps test output quiet, and avoids loading all of @ohif/core.
+jest.mock('@ohif/core', () => ({ log: { info: jest.fn(), warn: jest.fn() } }));
 
 const mockedPostToHost = postToHost as jest.MockedFunction<typeof postToHost>;
 
