@@ -1,4 +1,4 @@
-# @spsoft/extension-bridge
+# @spsoft-mvp/extension-bridge
 
 The viewer's half of the postMessage bridge to `apps/scoring-form`. Message contract:
 `shared/bridge-messages.ts` at the repo root (this extension has its own package manager —

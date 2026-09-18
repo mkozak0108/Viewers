@@ -1,10 +1,10 @@
 {
-  "name": "@spsoft/extension-bridge",
+  "name": "@spsoft-mvp/extension-bridge",
   "version": "0.1.0",
   "description": "Bridges the OHIF viewer to the host app: accepts commands via postMessage and publishes viewer events back out.",
   "author": "spsoft-mvp",
   "license": "MIT",
-  "main": "dist/spsoft-extension-bridge.umd.js",
+  "main": "dist/spsoft-mvp-extension-bridge.umd.js",
   "module": "src/index.ts",
   "engines": {
     "node": ">=24"
