@@ -151,7 +151,18 @@ export function watchMeasurements({
     }
 
     const { command, payload } = event.data;
-    if (command !== BridgeCommand.ActivateTool) {
+    if (command === BridgeCommand.DeactivateTool) {
+      // Ignored unless it names the pending row: a late cancel for a row the host has already
+      // replaced must not switch off the newer activation (research R7).
+      if (payload.rowId !== pendingRowId) {
+        log.debug('[bridge] ignored a cancel for a row that is not pending');
+        return;
+      }
+      pendingRowId = undefined;
+      const toolNames = getToolNames();
+      if (toolNames) {
+        setActiveTool(toolNames.Pan);
+      }
       return;
     }
     // The newest activation replaces an earlier one, which the host has already demoted.
