@@ -12,12 +12,8 @@ import {
 } from './messages';
 import { postToHost } from './postToHost';
 
-type StudySearch = (params: { studyInstanceUid: string }) => Promise<unknown[]>;
-
 export type WatchStudyParams = {
-  extensionManager: {
-    getActiveDataSource: () => Array<{ query: { studies: { search: StudySearch } } }>;
-  };
+  extensionManager: AppTypes.ExtensionManager;
 };
 
 /**
