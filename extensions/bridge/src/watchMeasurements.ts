@@ -38,23 +38,9 @@ type MeasurementAddedEvent = {
 };
 
 export type WatchMeasurementsParams = {
-  servicesManager: {
-    services: {
-      measurementService: {
-        EVENTS: { MEASUREMENT_ADDED: string };
-        subscribe: (
-          event: string,
-          callback: (event: MeasurementAddedEvent) => void
-        ) => { unsubscribe: () => void };
-      };
-    };
-  };
-  commandsManager: {
-    runCommand: (name: string, options: Record<string, unknown>, context: string) => unknown;
-  };
-  extensionManager: {
-    getModuleEntry: (id: string) => { exports: { toolNames: ToolNames } } | undefined;
-  };
+  servicesManager: AppTypes.ServicesManager;
+  commandsManager: AppTypes.CommandsManager;
+  extensionManager: AppTypes.ExtensionManager;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,8 +111,13 @@ export function watchMeasurements({
   const { measurementService } = servicesManager.services;
   let pendingRowId: string | undefined;
 
+  // OHIF types module entries as `unknown`, so the one field read here is named.
   const getToolNames = (): ToolNames | undefined =>
-    extensionManager.getModuleEntry(OhifModule.CornerstoneTools)?.exports.toolNames;
+    (
+      extensionManager.getModuleEntry(OhifModule.CornerstoneTools) as
+        | { exports: { toolNames: ToolNames } }
+        | undefined
+    )?.exports.toolNames;
 
   const setActiveTool = (toolName: string) =>
     commandsManager.runCommand(

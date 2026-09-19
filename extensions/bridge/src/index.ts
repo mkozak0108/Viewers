@@ -1,8 +1,8 @@
 import { Types } from '@ohif/core';
 
 import { id } from './id';
-import { watchMeasurements, type WatchMeasurementsParams } from './watchMeasurements';
-import { watchStudy, type WatchStudyParams } from './watchStudy';
+import { watchMeasurements } from './watchMeasurements';
+import { watchStudy } from './watchStudy';
 
 let stopWatching: (() => void) | undefined;
 let stopWatchingMeasurements: (() => void) | undefined;
@@ -12,11 +12,7 @@ const bridgeExtension: Types.Extensions.Extension = {
 
   preRegistration: (_params: Types.Extensions.ExtensionParams) => {},
 
-  onModeEnter: ({
-    servicesManager,
-    commandsManager,
-    extensionManager,
-  }: WatchStudyParams & WatchMeasurementsParams) => {
+  onModeEnter: ({ servicesManager, commandsManager, extensionManager }) => {
     stopWatching?.();
     stopWatching = watchStudy({ extensionManager });
     stopWatchingMeasurements?.();
