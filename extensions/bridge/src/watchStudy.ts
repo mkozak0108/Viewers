@@ -6,6 +6,7 @@ import {
   type BridgeEventMessage,
   BridgeMessageType,
   BridgeSource,
+  BridgeVersion,
   STUDY_UIDS_PARAM,
   StudyLoadFailureReason,
 } from './messages';
@@ -20,7 +21,8 @@ export type WatchStudyParams = {
 };
 
 /**
- * Posts at most one of `studyLoaded` / `studyLoadFailed` per call.
+ * Posts at most one of `STUDY_LOADED` / `STUDY_LOAD_FAILED` per call, and `VIEWER_READY` only
+ * right after the former.
  *
  * "Loaded" is the first non-preRender `IMAGE_RENDERED`, the signal OHIF itself uses to time the
  * first image (extensions/cornerstone/src/utils/initViewTiming.ts). Listening from
@@ -57,7 +59,17 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
     post({
       source: BridgeSource.Viewer,
       type: BridgeMessageType.Event,
+      version: BridgeVersion.V1,
       event: BridgeEvent.StudyLoaded,
+      payload: { StudyInstanceUID: studyInstanceUid },
+    });
+    // Tool groups are created after the bridge starts, so the first rendered image is the
+    // earliest moment the host's commands can work.
+    postToHost({
+      source: BridgeSource.Viewer,
+      type: BridgeMessageType.Event,
+      version: BridgeVersion.V1,
+      event: BridgeEvent.ViewerReady,
       payload: { StudyInstanceUID: studyInstanceUid },
     });
   };
@@ -105,6 +117,7 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
       post({
         source: BridgeSource.Viewer,
         type: BridgeMessageType.Event,
+        version: BridgeVersion.V1,
         event: BridgeEvent.StudyLoadFailed,
         payload: { StudyInstanceUID: studyInstanceUid, reason },
       });
