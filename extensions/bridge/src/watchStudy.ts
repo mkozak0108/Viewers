@@ -12,6 +12,11 @@ import {
 } from './messages';
 import { postToHost } from './postToHost';
 
+// OHIF types data sources as `any`, so only the one call used here is named.
+type DataSource = {
+  query: { studies: { search: (params: { studyInstanceUid: string }) => Promise<unknown[]> } };
+};
+
 export type WatchStudyParams = {
   extensionManager: AppTypes.ExtensionManager;
 };
@@ -90,9 +95,10 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
   eventTarget.addEventListener(Enums.Events.ELEMENT_ENABLED, onElementEnabled);
 
   // The executor runs synchronously, so a throw from the data source becomes a rejection.
-  new Promise<unknown[]>(resolve =>
-    resolve(extensionManager.getActiveDataSource()[0].query.studies.search({ studyInstanceUid }))
-  )
+  new Promise<unknown[]>(resolve => {
+    const [dataSource]: DataSource[] = extensionManager.getActiveDataSource();
+    resolve(dataSource.query.studies.search({ studyInstanceUid }));
+  })
     .then(
       (studies): StudyLoadFailureReason | null =>
         studies?.length ? null : StudyLoadFailureReason.NotFound,
