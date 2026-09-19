@@ -295,7 +295,7 @@ export function watchMeasurements({
     }
   );
 
-  // Bulk deletes ("Delete all", a group's Delete) fire only this, with no per-item REMOVED.
+  // A bulk delete fires only this, with no MEASUREMENT_REMOVED per measurement.
   const clearedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENTS_CLEARED,
     ({ measurements }: { measurements: unknown }) => {
