@@ -1,12 +1,10 @@
 import { Enums, eventTarget } from '@cornerstonejs/core';
 import { log } from '@ohif/core';
 
+import { buildEvent } from './buildMessages';
 import {
   BridgeEvent,
   type BridgeEventMessage,
-  BridgeMessageType,
-  BridgeSource,
-  BridgeVersion,
   STUDY_UIDS_PARAM,
   StudyLoadFailureReason,
 } from './messages';
@@ -57,22 +55,10 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
       return;
     }
     log.info('[bridge] study is on screen');
-    post({
-      source: BridgeSource.Viewer,
-      type: BridgeMessageType.Event,
-      version: BridgeVersion.V1,
-      event: BridgeEvent.StudyLoaded,
-      payload: { StudyInstanceUID: studyInstanceUid },
-    });
+    post(buildEvent(BridgeEvent.StudyLoaded, { StudyInstanceUID: studyInstanceUid }));
     // Tool groups are created after the bridge starts, so the first rendered image is the
     // earliest moment the host's commands can work.
-    postToHost({
-      source: BridgeSource.Viewer,
-      type: BridgeMessageType.Event,
-      version: BridgeVersion.V1,
-      event: BridgeEvent.ViewerReady,
-      payload: { StudyInstanceUID: studyInstanceUid },
-    });
+    postToHost(buildEvent(BridgeEvent.ViewerReady, { StudyInstanceUID: studyInstanceUid }));
   };
 
   const onElementEnabled = (event: Event) => {
@@ -116,13 +102,7 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
         return;
       }
       log.warn(`[bridge] study failed to load: ${reason}`);
-      post({
-        source: BridgeSource.Viewer,
-        type: BridgeMessageType.Event,
-        version: BridgeVersion.V1,
-        event: BridgeEvent.StudyLoadFailed,
-        payload: { StudyInstanceUID: studyInstanceUid, reason },
-      });
+      post(buildEvent(BridgeEvent.StudyLoadFailed, { StudyInstanceUID: studyInstanceUid, reason }));
     });
 
   return removeListeners;

@@ -1,5 +1,6 @@
 import { log } from '@ohif/core';
 
+import { buildEvent } from './buildMessages';
 import {
   BridgeCommand,
   type BridgeCommandMessage,
@@ -189,18 +190,14 @@ export function watchMeasurements({
         log.error('[bridge] no study in the page address; the measurement was not sent');
         return;
       }
-      postToHost({
-        source: BridgeSource.Viewer,
-        type: BridgeMessageType.Event,
-        version: BridgeVersion.V1,
-        event: BridgeEvent.MeasurementAdded,
-        payload: {
+      postToHost(
+        buildEvent(BridgeEvent.MeasurementAdded, {
           StudyInstanceUID: studyInstanceUid,
           rowId: pendingRowId,
           area: result.area,
           unit: result.unit,
-        },
-      });
+        })
+      );
       pendingRowId = undefined;
       setActiveTool(toolNames.Pan);
     }

@@ -54,19 +54,19 @@ type ForStudy<Fields = unknown> = { StudyInstanceUID: string } & Fields;
 
 // One line per message: the envelope below is written once per direction. MEASUREMENT_UPDATED
 // is left out on purpose, so no message can carry it.
-type EventPayloads = {
+export type EventPayloads = {
   [BridgeEvent.StudyLoaded]: ForStudy;
   [BridgeEvent.StudyLoadFailed]: ForStudy<{ reason: StudyLoadFailureReason }>;
   [BridgeEvent.ViewerReady]: ForStudy;
   [BridgeEvent.MeasurementAdded]: ForStudy<{ rowId: string; area: number; unit: string }>;
 };
 
-type CommandPayloads = {
+export type CommandPayloads = {
   [BridgeCommand.ActivateTool]: { rowId: string; tool: BridgeTool };
   [BridgeCommand.DeactivateTool]: { rowId: string };
 };
 
-type EventMessage<E extends keyof EventPayloads> = {
+export type EventMessage<E extends keyof EventPayloads> = {
   source: BridgeSource.Viewer;
   type: BridgeMessageType.Event;
   version: BridgeVersion.V1;
@@ -74,7 +74,7 @@ type EventMessage<E extends keyof EventPayloads> = {
   payload: EventPayloads[E];
 };
 
-type CommandMessage<C extends keyof CommandPayloads> = {
+export type CommandMessage<C extends keyof CommandPayloads> = {
   source: BridgeSource.Host;
   type: BridgeMessageType.Command;
   version: BridgeVersion.V1;
