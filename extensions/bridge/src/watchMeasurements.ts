@@ -12,6 +12,7 @@ import {
   STUDY_UIDS_PARAM,
 } from './messages';
 import { HostOrigin, postToHost } from './postToHost';
+import { isNonEmptyString, isRecord } from './utils/guards';
 
 // OHIF's own identifiers: they must match the fork's cornerstone `commandsModule.ts` and the
 // module ids its extension registers.
@@ -43,14 +44,6 @@ export type WatchMeasurementsParams = {
   commandsManager: AppTypes.CommandsManager;
   extensionManager: AppTypes.ExtensionManager;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value !== '';
-}
 
 /** Message data is untrusted input: this is the runtime check, the types are not. */
 function isBridgeCommandMessage(data: unknown): data is BridgeCommandMessage {
