@@ -263,12 +263,62 @@ export function watchMeasurements({
     }
   );
 
+  const reportRemoved = (uid: string) => {
+    const link = links.get(uid);
+    if (!link) {
+      return;
+    }
+    links.delete(uid);
+    const studyInstanceUid = studyInstanceUidFromAddress();
+    if (!studyInstanceUid) {
+      return;
+    }
+    postToHost(
+      buildEvent(BridgeEvent.MeasurementUpdated, {
+        StudyInstanceUID: studyInstanceUid,
+        rowId: link.rowId,
+        change: MeasurementChange.Removed,
+      })
+    );
+  };
+
+  // OHIF's own clear at mode enter and exit never reaches the form: on exit the extensions'
+  // onModeExit, which unsubscribes these, runs before the services'; on enter there are no links.
+  const removedSubscription = measurementService.subscribe(
+    measurementService.EVENTS.MEASUREMENT_REMOVED,
+    ({ measurement: uid }: { measurement: unknown }) => {
+      if (typeof uid !== 'string') {
+        log.warn('[bridge] a removed measurement came without its uid; nothing was sent');
+        return;
+      }
+      reportRemoved(uid);
+    }
+  );
+
+  // Bulk deletes ("Delete all", a group's Delete) fire only this, with no per-item REMOVED.
+  const clearedSubscription = measurementService.subscribe(
+    measurementService.EVENTS.MEASUREMENTS_CLEARED,
+    ({ measurements }: { measurements: unknown }) => {
+      if (!Array.isArray(measurements)) {
+        log.warn('[bridge] cleared measurements came without a list; nothing was sent');
+        return;
+      }
+      for (const measurement of measurements) {
+        if (isRecord(measurement) && typeof measurement.uid === 'string') {
+          reportRemoved(measurement.uid);
+        }
+      }
+    }
+  );
+
   window.addEventListener('message', onMessage);
 
   return () => {
     window.removeEventListener('message', onMessage);
     addedSubscription.unsubscribe();
     updatedSubscription.unsubscribe();
+    removedSubscription.unsubscribe();
+    clearedSubscription.unsubscribe();
     pendingRowId = undefined;
     links.clear();
   };
