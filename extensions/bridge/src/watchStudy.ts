@@ -1,26 +1,27 @@
 import { Enums, eventTarget } from '@cornerstonejs/core';
 import { log } from '@ohif/core';
 
+import { buildEvent } from './buildMessages';
 import {
   BridgeEvent,
   type BridgeEventMessage,
-  BridgeMessageType,
-  BridgeSource,
   STUDY_UIDS_PARAM,
   StudyLoadFailureReason,
 } from './messages';
 import { postToHost } from './postToHost';
 
-type StudySearch = (params: { studyInstanceUid: string }) => Promise<unknown[]>;
+// OHIF types data sources as `any`, so only the one call used here is named.
+type DataSource = {
+  query: { studies: { search: (params: { studyInstanceUid: string }) => Promise<unknown[]> } };
+};
 
 export type WatchStudyParams = {
-  extensionManager: {
-    getActiveDataSource: () => Array<{ query: { studies: { search: StudySearch } } }>;
-  };
+  extensionManager: AppTypes.ExtensionManager;
 };
 
 /**
- * Posts at most one of `studyLoaded` / `studyLoadFailed` per call.
+ * Posts at most one of `STUDY_LOADED` / `STUDY_LOAD_FAILED` per call, and `VIEWER_READY` only
+ * right after the former.
  *
  * "Loaded" is the first non-preRender `IMAGE_RENDERED`, the signal OHIF itself uses to time the
  * first image (extensions/cornerstone/src/utils/initViewTiming.ts). Listening from
@@ -54,12 +55,10 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
       return;
     }
     log.info('[bridge] study is on screen');
-    post({
-      source: BridgeSource.Viewer,
-      type: BridgeMessageType.Event,
-      event: BridgeEvent.StudyLoaded,
-      payload: { StudyInstanceUID: studyInstanceUid },
-    });
+    post(buildEvent(BridgeEvent.StudyLoaded, { StudyInstanceUID: studyInstanceUid }));
+    // Tool groups are created after the bridge starts, so the first rendered image is the
+    // earliest moment the host's commands can work.
+    postToHost(buildEvent(BridgeEvent.ViewerReady, { StudyInstanceUID: studyInstanceUid }));
   };
 
   const onElementEnabled = (event: Event) => {
@@ -82,9 +81,10 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
   eventTarget.addEventListener(Enums.Events.ELEMENT_ENABLED, onElementEnabled);
 
   // The executor runs synchronously, so a throw from the data source becomes a rejection.
-  new Promise<unknown[]>(resolve =>
-    resolve(extensionManager.getActiveDataSource()[0].query.studies.search({ studyInstanceUid }))
-  )
+  new Promise<unknown[]>(resolve => {
+    const [dataSource]: DataSource[] = extensionManager.getActiveDataSource();
+    resolve(dataSource.query.studies.search({ studyInstanceUid }));
+  })
     .then(
       (studies): StudyLoadFailureReason | null =>
         studies?.length ? null : StudyLoadFailureReason.NotFound,
@@ -102,12 +102,7 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
         return;
       }
       log.warn(`[bridge] study failed to load: ${reason}`);
-      post({
-        source: BridgeSource.Viewer,
-        type: BridgeMessageType.Event,
-        event: BridgeEvent.StudyLoadFailed,
-        payload: { StudyInstanceUID: studyInstanceUid, reason },
-      });
+      post(buildEvent(BridgeEvent.StudyLoadFailed, { StudyInstanceUID: studyInstanceUid, reason }));
     });
 
   return removeListeners;

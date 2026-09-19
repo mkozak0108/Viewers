@@ -53,6 +53,9 @@ window.config = {
     // viewportRendering: 'auto',
   },
   // ----------------------------------------------------------------------------
+  // OHIF's default, 'standard', opens a "track measurements?" modal on the first measurement,
+  // which would stop the scoring form's flow: nothing here is saved or tracked.
+  measurementTrackingMode: 'none',
   showStudyList: true,
   // some windows systems have issues with more than 3 web workers
   maxNumberOfWebWorkers: 3,
