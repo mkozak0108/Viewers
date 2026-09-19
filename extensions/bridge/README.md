@@ -1,9 +1,10 @@
 # @spsoft-mvp/extension-bridge
 
 The viewer's half of the postMessage bridge to `apps/scoring-form`. The message contract is
-`src/messages.ts`, the only copy: types only, no imports. The scoring app type-imports it through
-the `apps/viewer` submodule, so change it here through a fork PR, then bump the submodule in the
-parent repo.
+`src/messages.ts`, the only copy: the message types plus the enums both apps use for their values
+(event names, failure reasons, the source and type markers). It has no imports. The scoring app
+imports it through the `apps/viewer` submodule, so change it here through a fork PR, then bump the
+submodule in the parent repo.
 
 ## What it posts
 
@@ -26,12 +27,12 @@ produces no event. The host decides what to show then.
 
 ## Where it posts
 
-Only when the viewer is framed, and only to the host origins in `HOST_ORIGINS`
+Only when the viewer is framed, and only to the host origins in the `HostOrigin` enum
 (`src/postToHost.ts`): `http://localhost:5173` (the scoring app's dev server) and
 `http://localhost:4173` (`vite preview`). It posts to each one, and the browser drops deliveries
 whose origin doesn't match the parent, logging a "target origin … does not match" warning in the
 console. It never posts to `'*'`. To embed the viewer somewhere else, add that origin to
-`HOST_ORIGINS`.
+`HostOrigin`.
 
 ## Tests
 

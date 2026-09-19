@@ -1,7 +1,14 @@
 import { Enums, eventTarget } from '@cornerstonejs/core';
 import { log } from '@ohif/core';
 
-import type { BridgeEventMessage, StudyLoadFailureReason } from './messages';
+import {
+  BridgeEvent,
+  type BridgeEventMessage,
+  BridgeMessageType,
+  BridgeSource,
+  STUDY_UIDS_PARAM,
+  StudyLoadFailureReason,
+} from './messages';
 import { postToHost } from './postToHost';
 
 type StudySearch = (params: { studyInstanceUid: string }) => Promise<unknown[]>;
@@ -13,25 +20,21 @@ export type WatchStudyParams = {
 };
 
 /**
- * Tells the host app what happened to the study named by the page's
- * `StudyInstanceUIDs` parameter, with at most one message per call:
+ * Posts at most one of `studyLoaded` / `studyLoadFailed` per call.
  *
- * - `studyLoaded` on the first `IMAGE_RENDERED` on any viewport element that
- *   isn't a `preRender`. Render listeners are attached as each element is
- *   enabled, before anything can be drawn on it, the same way OHIF times its
- *   first image (extensions/cornerstone/src/utils/initViewTiming.ts).
- * - `studyLoadFailed` when the bridge's own search for the study finds nothing
- *   (`notFound`) or fails (`sourceUnreachable`). OHIF runs the same search in
- *   `validateStudies` (platform/app/src/routes/Mode/Mode.tsx) but only
- *   redirects to /notfoundstudy, without saying why.
+ * "Loaded" is the first non-preRender `IMAGE_RENDERED`, the signal OHIF itself uses to time the
+ * first image (extensions/cornerstone/src/utils/initViewTiming.ts). Listening from
+ * `ELEMENT_ENABLED` attaches it before anything can be drawn.
  *
- * Returns a function that removes every listener. It doesn't cancel the
- * search: OHIF's redirect on a missing study is what exits the mode.
+ * Failures come from repeating OHIF's own study search (`validateStudies` in
+ * platform/app/src/routes/Mode/Mode.tsx), because OHIF only redirects to /notfoundstudy without
+ * saying why. The returned stop function doesn't cancel that search: the redirect is what exits
+ * the mode, and its result still has to reach the host.
  */
 export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
-  const studyInstanceUid = new URLSearchParams(window.location.search).get('StudyInstanceUIDs');
+  const studyInstanceUid = new URLSearchParams(window.location.search).get(STUDY_UIDS_PARAM);
   if (!studyInstanceUid) {
-    log.info('[bridge] no StudyInstanceUIDs in the page address; not watching the study');
+    log.info('[bridge] no study in the page address; not watching');
     return () => {};
   }
 
@@ -45,15 +48,16 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
   };
 
   const onImageRendered = (event: Event) => {
-    const { viewportStatus } = (event as CustomEvent<{ viewportStatus: string }>).detail;
+    const { viewportStatus } = (event as CustomEvent<{ viewportStatus: Enums.ViewportStatus }>)
+      .detail;
     if (posted || viewportStatus === Enums.ViewportStatus.PRE_RENDER) {
       return;
     }
     log.info('[bridge] study is on screen');
     post({
-      source: 'spsoft-mvp-viewer',
-      type: 'event',
-      event: 'studyLoaded',
+      source: BridgeSource.Viewer,
+      type: BridgeMessageType.Event,
+      event: BridgeEvent.StudyLoaded,
       payload: { StudyInstanceUID: studyInstanceUid },
     });
   };
@@ -77,15 +81,16 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
 
   eventTarget.addEventListener(Enums.Events.ELEMENT_ENABLED, onElementEnabled);
 
-  // The executor runs synchronously, so a throw becomes a rejection.
+  // The executor runs synchronously, so a throw from the data source becomes a rejection.
   new Promise<unknown[]>(resolve =>
     resolve(extensionManager.getActiveDataSource()[0].query.studies.search({ studyInstanceUid }))
   )
     .then(
-      (studies): StudyLoadFailureReason | null => (studies?.length ? null : 'notFound'),
+      (studies): StudyLoadFailureReason | null =>
+        studies?.length ? null : StudyLoadFailureReason.NotFound,
       (error: unknown): StudyLoadFailureReason => {
         log.warn('[bridge] study search failed', error);
-        return 'sourceUnreachable';
+        return StudyLoadFailureReason.SourceUnreachable;
       }
     )
     .then(reason => {
@@ -98,9 +103,9 @@ export function watchStudy({ extensionManager }: WatchStudyParams): () => void {
       }
       log.warn(`[bridge] study failed to load: ${reason}`);
       post({
-        source: 'spsoft-mvp-viewer',
-        type: 'event',
-        event: 'studyLoadFailed',
+        source: BridgeSource.Viewer,
+        type: BridgeMessageType.Event,
+        event: BridgeEvent.StudyLoadFailed,
         payload: { StudyInstanceUID: studyInstanceUid, reason },
       });
     });
