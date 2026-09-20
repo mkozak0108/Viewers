@@ -274,10 +274,9 @@ export function watchMeasurements({
       return;
     }
     postToHost(
-      buildEvent(BridgeEvent.MeasurementUpdated, {
+      buildEvent(BridgeEvent.MeasurementRemoved, {
         StudyInstanceUID: studyInstanceUid,
         rowId: link.rowId,
-        change: MeasurementChange.Removed,
       })
     );
   };
