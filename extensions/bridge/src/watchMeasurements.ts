@@ -9,6 +9,7 @@ import {
   BridgeSource,
   BridgeTool,
   BridgeVersion,
+  MeasurementChange,
   STUDY_UIDS_PARAM,
 } from './messages';
 import { HostOrigin, postToHost } from './postToHost';
@@ -35,9 +36,17 @@ const BRIDGE_COMMANDS: readonly unknown[] = Object.values(BridgeCommand);
 
 type ToolNames = Record<string, string>;
 
-type MeasurementAddedEvent = {
-  measurement: { toolName: string; data: Record<string, { area?: unknown; areaUnit?: unknown }> };
+type MeasurementStats = Record<string, { area?: unknown; areaUnit?: unknown }>;
+
+// OHIF's measurement uid is the annotation's uid, the same in ADDED, UPDATED and REMOVED.
+type MeasurementEvent = {
+  measurement: { uid: string; toolName: string; data: MeasurementStats };
 };
+
+type Area = { area: number; unit: string };
+
+/** `last` is what the host was last told; `undefined` means the area was unavailable. */
+type Link = { rowId: string; last: Area | undefined };
 
 export type WatchMeasurementsParams = {
   servicesManager: AppTypes.ServicesManager;
@@ -74,9 +83,7 @@ function ohifToolName(tool: BridgeTool, toolNames: ToolNames): string {
   return names[tool];
 }
 
-function firstArea(
-  data: MeasurementAddedEvent['measurement']['data']
-): { area: number; unit: string } | undefined {
+function firstArea(data: MeasurementStats): Area | undefined {
   for (const stats of Object.values(data ?? {})) {
     if (
       typeof stats?.area === 'number' &&
@@ -88,6 +95,19 @@ function firstArea(
     }
   }
   return undefined;
+}
+
+function isSameArea(a: Area | undefined, b: Area | undefined): boolean {
+  return a === b || (a !== undefined && b !== undefined && a.area === b.area && a.unit === b.unit);
+}
+
+function studyInstanceUidFromAddress(): string | undefined {
+  const studyInstanceUid = new URLSearchParams(window.location.search).get(STUDY_UIDS_PARAM);
+  if (!studyInstanceUid) {
+    log.error('[bridge] no study in the page address; the measurement was not sent');
+    return undefined;
+  }
+  return studyInstanceUid;
 }
 
 /**
@@ -104,6 +124,9 @@ export function watchMeasurements({
 }: WatchMeasurementsParams): () => void {
   const { measurementService } = servicesManager.services;
   let pendingRowId: string | undefined;
+  // Measurement uid → the row its ellipse was drawn for. The uid never goes on the wire, so the
+  // host keeps knowing rows only by the ids it made.
+  const links = new Map<string, Link>();
 
   // OHIF types module entries as `unknown`, so the one field read here is named.
   const getToolNames = (): ToolNames | undefined =>
@@ -161,9 +184,9 @@ export function watchMeasurements({
     setActiveTool(ohifToolName(payload.tool, toolNames));
   };
 
-  const subscription = measurementService.subscribe(
+  const addedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_ADDED,
-    ({ measurement }) => {
+    ({ measurement }: MeasurementEvent) => {
       const toolNames = getToolNames();
       // With nothing pending this is a drawing from the viewer's own toolbar.
       if (pendingRowId === undefined || !toolNames) {
@@ -178,21 +201,112 @@ export function watchMeasurements({
         log.error('[bridge] the finished ellipse has no area; nothing was sent');
         return;
       }
-      const studyInstanceUid = new URLSearchParams(window.location.search).get(STUDY_UIDS_PARAM);
+      const studyInstanceUid = studyInstanceUidFromAddress();
       if (!studyInstanceUid) {
-        log.error('[bridge] no study in the page address; the measurement was not sent');
         return;
       }
+      const rowId = pendingRowId;
       postToHost(
         buildEvent(BridgeEvent.MeasurementAdded, {
           StudyInstanceUID: studyInstanceUid,
-          rowId: pendingRowId,
+          rowId,
           area: result.area,
           unit: result.unit,
         })
       );
+      links.set(measurement.uid, { rowId, last: result });
       pendingRowId = undefined;
       setActiveTool(toolNames.Pan);
+    }
+  );
+
+  // No throttle of our own: cornerstone recomputes the area at most every 100 ms during a drag,
+  // and once more after it stops, which is both the live pace and the final value (research R1).
+  const updatedSubscription = measurementService.subscribe(
+    measurementService.EVENTS.MEASUREMENT_UPDATED,
+    ({ measurement }: MeasurementEvent) => {
+      // Also fired from mouse-down and throughout the first drawing of a new ellipse, and for
+      // ellipses drawn from the viewer's own toolbar: none of those belongs to a row yet.
+      const link = links.get(measurement.uid);
+      if (!link) {
+        return;
+      }
+      const result = firstArea(measurement.data);
+      // Most of these events repeat the last area (a handle move before the stats are recomputed,
+      // selection, lock, visibility), and the message means "it changed".
+      if (isSameArea(result, link.last)) {
+        return;
+      }
+      const studyInstanceUid = studyInstanceUidFromAddress();
+      if (!studyInstanceUid) {
+        return;
+      }
+      postToHost(
+        buildEvent(
+          BridgeEvent.MeasurementUpdated,
+          result
+            ? {
+                StudyInstanceUID: studyInstanceUid,
+                rowId: link.rowId,
+                change: MeasurementChange.AreaChanged,
+                area: result.area,
+                unit: result.unit,
+              }
+            : {
+                StudyInstanceUID: studyInstanceUid,
+                rowId: link.rowId,
+                change: MeasurementChange.AreaUnavailable,
+              }
+        )
+      );
+      link.last = result;
+    }
+  );
+
+  const reportRemoved = (uid: string) => {
+    const link = links.get(uid);
+    if (!link) {
+      return;
+    }
+    links.delete(uid);
+    const studyInstanceUid = studyInstanceUidFromAddress();
+    if (!studyInstanceUid) {
+      return;
+    }
+    postToHost(
+      buildEvent(BridgeEvent.MeasurementRemoved, {
+        StudyInstanceUID: studyInstanceUid,
+        rowId: link.rowId,
+      })
+    );
+  };
+
+  // OHIF's own clear at mode enter and exit never reaches the form: on exit the extensions'
+  // onModeExit, which unsubscribes these, runs before the services'; on enter there are no links.
+  const removedSubscription = measurementService.subscribe(
+    measurementService.EVENTS.MEASUREMENT_REMOVED,
+    ({ measurement: uid }: { measurement: unknown }) => {
+      if (typeof uid !== 'string') {
+        log.warn('[bridge] a removed measurement came without its uid; nothing was sent');
+        return;
+      }
+      reportRemoved(uid);
+    }
+  );
+
+  // A bulk delete fires only this, with no MEASUREMENT_REMOVED per measurement.
+  const clearedSubscription = measurementService.subscribe(
+    measurementService.EVENTS.MEASUREMENTS_CLEARED,
+    ({ measurements }: { measurements: unknown }) => {
+      if (!Array.isArray(measurements)) {
+        log.warn('[bridge] cleared measurements came without a list; nothing was sent');
+        return;
+      }
+      for (const measurement of measurements) {
+        if (isRecord(measurement) && typeof measurement.uid === 'string') {
+          reportRemoved(measurement.uid);
+        }
+      }
     }
   );
 
@@ -200,7 +314,11 @@ export function watchMeasurements({
 
   return () => {
     window.removeEventListener('message', onMessage);
-    subscription.unsubscribe();
+    addedSubscription.unsubscribe();
+    updatedSubscription.unsubscribe();
+    removedSubscription.unsubscribe();
+    clearedSubscription.unsubscribe();
     pendingRowId = undefined;
+    links.clear();
   };
 }

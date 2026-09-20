@@ -4,7 +4,9 @@
  * through the submodule, so change it through a fork PR, then bump the submodule in the parent
  * repo. Every message carries `version`: the two apps ship separately, and a receiver that
  * can't tell versions apart would misread a changed payload without any error. The rules are in
- * specs/003-add-area-measurements/contracts/bridge-messages.md.
+ * specs/003-add-area-measurements/contracts/bridge-messages.md and, for the measurement changes,
+ * specs/004-live-measurement-update/contracts/bridge-messages.md. MEASUREMENT_REMOVED is named
+ * after the viewer's own removal event, so the two sides read the same way.
  *
  * No imports: two toolchains compile this file, this fork's babel and the scoring app's Vite.
  */
@@ -31,9 +33,8 @@ export enum BridgeEvent {
   StudyLoadFailed = 'STUDY_LOAD_FAILED',
   ViewerReady = 'VIEWER_READY',
   MeasurementAdded = 'MEASUREMENT_ADDED',
-  // Reserved for the starred task 5.1 (editing a finished measurement). No message in the
-  // unions below carries it, so neither app can send or accept it yet.
   MeasurementUpdated = 'MEASUREMENT_UPDATED',
+  MeasurementRemoved = 'MEASUREMENT_REMOVED',
 }
 
 export enum BridgeCommand {
@@ -50,15 +51,25 @@ export enum StudyLoadFailureReason {
   SourceUnreachable = 'sourceUnreachable',
 }
 
+export enum MeasurementChange {
+  AreaChanged = 'areaChanged',
+  AreaUnavailable = 'areaUnavailable',
+}
+
 type ForStudy<Fields = unknown> = { StudyInstanceUID: string } & Fields;
 
-// One line per message: the envelope below is written once per direction. MEASUREMENT_UPDATED
-// is left out on purpose, so no message can carry it.
+type MeasurementUpdate =
+  | { change: MeasurementChange.AreaChanged; area: number; unit: string }
+  | { change: MeasurementChange.AreaUnavailable };
+
+// One line per message: the envelope below is written once per direction.
 export type EventPayloads = {
   [BridgeEvent.StudyLoaded]: ForStudy;
   [BridgeEvent.StudyLoadFailed]: ForStudy<{ reason: StudyLoadFailureReason }>;
   [BridgeEvent.ViewerReady]: ForStudy;
   [BridgeEvent.MeasurementAdded]: ForStudy<{ rowId: string; area: number; unit: string }>;
+  [BridgeEvent.MeasurementUpdated]: ForStudy<{ rowId: string } & MeasurementUpdate>;
+  [BridgeEvent.MeasurementRemoved]: ForStudy<{ rowId: string }>;
 };
 
 export type CommandPayloads = {
