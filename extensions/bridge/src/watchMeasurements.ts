@@ -3,13 +3,15 @@ import { log } from '@ohif/core';
 import { buildEvent } from './buildMessages';
 import {
   BridgeCommand,
-  type BridgeCommandMessage,
   BridgeEvent,
   BridgeMessageType,
   BridgeSource,
   BridgeTool,
   BridgeVersion,
+  type CommandMessage,
+  type EllipseGeometry,
   MeasurementChange,
+  type Point3,
   STUDY_UIDS_PARAM,
 } from './messages';
 import { HostOrigin, postToHost } from './postToHost';
@@ -32,21 +34,39 @@ enum OhifModule {
 const MAX_ROW_ID_LENGTH = 64;
 const HOST_ORIGINS: readonly string[] = Object.values(HostOrigin);
 const BRIDGE_TOOLS: readonly unknown[] = Object.values(BridgeTool);
-const BRIDGE_COMMANDS: readonly unknown[] = Object.values(BridgeCommand);
+// RESTORE_MEASUREMENTS is not handled yet, so it fails the check like any unknown command.
+const TOOL_COMMANDS: readonly unknown[] = [
+  BridgeCommand.ActivateTool,
+  BridgeCommand.DeactivateTool,
+];
+
+type ToolCommandMessage =
+  | CommandMessage<BridgeCommand.ActivateTool>
+  | CommandMessage<BridgeCommand.DeactivateTool>;
 
 type ToolNames = Record<string, string>;
 
 type MeasurementStats = Record<string, { area?: unknown; areaUnit?: unknown }>;
 
-// OHIF's measurement uid is the annotation's uid, the same in ADDED, UPDATED and REMOVED.
+// OHIF's measurement uid is the annotation's uid, the same in ADDED, UPDATED and REMOVED. The
+// EllipticalROI mapping also copies the annotation's handle points and metadata onto it.
 type MeasurementEvent = {
-  measurement: { uid: string; toolName: string; data: MeasurementStats };
+  measurement: {
+    uid: string;
+    toolName: string;
+    data: MeasurementStats;
+    points?: unknown;
+    metadata?: unknown;
+  };
 };
 
 type Area = { area: number; unit: string };
 
-/** `last` is what the host was last told; `undefined` means the area was unavailable. */
-type Link = { rowId: string; last: Area | undefined };
+/**
+ * `last` and `lastEllipse` are what the host was last told; `last` is `undefined` while the area
+ * is unavailable.
+ */
+type Link = { rowId: string; last: Area | undefined; lastEllipse: EllipseGeometry };
 
 export type WatchMeasurementsParams = {
   servicesManager: AppTypes.ServicesManager;
@@ -55,12 +75,12 @@ export type WatchMeasurementsParams = {
 };
 
 /** Message data is untrusted input: this is the runtime check, the types are not. */
-function isBridgeCommandMessage(data: unknown): data is BridgeCommandMessage {
+function isToolCommandMessage(data: unknown): data is ToolCommandMessage {
   if (
     !isRecord(data) ||
     data.source !== BridgeSource.Host ||
     data.type !== BridgeMessageType.Command ||
-    !BRIDGE_COMMANDS.includes(data.command)
+    !TOOL_COMMANDS.includes(data.command)
   ) {
     return false;
   }
@@ -99,6 +119,63 @@ function firstArea(data: MeasurementStats): Area | undefined {
 
 function isSameArea(a: Area | undefined, b: Area | undefined): boolean {
   return a === b || (a !== undefined && b !== undefined && a.area === b.area && a.unit === b.unit);
+}
+
+// Copies as well as checks: cornerstone moves an ellipse by changing its point arrays in place, so
+// a kept reference would always equal the current points and a move would never be reported.
+function toPoint3(value: unknown): Point3 | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length !== 3 ||
+    !value.every(n => typeof n === 'number' && Number.isFinite(n))
+  ) {
+    return undefined;
+  }
+  return [value[0], value[1], value[2]];
+}
+
+function ellipseOf(measurement: MeasurementEvent['measurement']): EllipseGeometry | undefined {
+  const { metadata, points } = measurement;
+  if (!isRecord(metadata) || !Array.isArray(points) || points.length !== 4) {
+    return undefined;
+  }
+  const { referencedImageId, FrameOfReferenceUID } = metadata;
+  const viewPlaneNormal = toPoint3(metadata.viewPlaneNormal);
+  const viewUp = toPoint3(metadata.viewUp);
+  const [bottom, top, left, right] = points.map(toPoint3);
+  if (
+    !isNonEmptyString(referencedImageId) ||
+    !isNonEmptyString(FrameOfReferenceUID) ||
+    !viewPlaneNormal ||
+    !viewUp ||
+    !bottom ||
+    !top ||
+    !left ||
+    !right
+  ) {
+    return undefined;
+  }
+  return {
+    referencedImageId,
+    FrameOfReferenceUID,
+    viewPlaneNormal,
+    viewUp,
+    points: [bottom, top, left, right],
+  };
+}
+
+function isSamePoint(a: Point3, b: Point3): boolean {
+  return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+}
+
+function isSameEllipse(a: EllipseGeometry, b: EllipseGeometry): boolean {
+  return (
+    a.referencedImageId === b.referencedImageId &&
+    a.FrameOfReferenceUID === b.FrameOfReferenceUID &&
+    isSamePoint(a.viewPlaneNormal, b.viewPlaneNormal) &&
+    isSamePoint(a.viewUp, b.viewUp) &&
+    a.points.every((point, i) => isSamePoint(point, b.points[i]))
+  );
 }
 
 function studyInstanceUidFromAddress(): string | undefined {
@@ -153,7 +230,7 @@ export function watchMeasurements({
       log.warn('[bridge] ignored a host message: unsupported version');
       return;
     }
-    if (!isBridgeCommandMessage(event.data)) {
+    if (!isToolCommandMessage(event.data)) {
       log.warn('[bridge] ignored a host message: unexpected shape');
       return;
     }
@@ -201,6 +278,12 @@ export function watchMeasurements({
         log.error('[bridge] the finished ellipse has no area; nothing was sent');
         return;
       }
+      const ellipse = ellipseOf(measurement);
+      if (!ellipse) {
+        // The form saves where each ellipse is; a value it could never restore is worse than none.
+        log.warn('[bridge] the finished ellipse has no usable geometry; nothing was sent');
+        return;
+      }
       const studyInstanceUid = studyInstanceUidFromAddress();
       if (!studyInstanceUid) {
         return;
@@ -212,16 +295,18 @@ export function watchMeasurements({
           rowId,
           area: result.area,
           unit: result.unit,
+          ellipse,
         })
       );
-      links.set(measurement.uid, { rowId, last: result });
+      links.set(measurement.uid, { rowId, last: result, lastEllipse: ellipse });
       pendingRowId = undefined;
       setActiveTool(toolNames.Pan);
     }
   );
 
   // No throttle of our own: cornerstone recomputes the area at most every 100 ms during a drag,
-  // and once more after it stops, which is both the live pace and the final value (research R1).
+  // and once more after it stops, which is both the live pace and the final value (004 research
+  // R1). The shape changes with every mouse move; the host throttles its saving instead (005 R10).
   const updatedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_UPDATED,
     ({ measurement }: MeasurementEvent) => {
@@ -232,9 +317,15 @@ export function watchMeasurements({
         return;
       }
       const result = firstArea(measurement.data);
-      // Most of these events repeat the last area (a handle move before the stats are recomputed,
-      // selection, lock, visibility), and the message means "it changed".
-      if (isSameArea(result, link.last)) {
+      const ellipse = ellipseOf(measurement);
+      if (!ellipse) {
+        log.warn('[bridge] an ellipse changed but has no usable geometry; nothing was sent');
+        return;
+      }
+      // The message means "the area, the unit or the shape changed". Selection, lock and
+      // visibility repeat all three, so they are dropped here. A move with no resize is a real
+      // change: the form saves where the ellipse is, to draw it there again after a reload.
+      if (isSameArea(result, link.last) && isSameEllipse(ellipse, link.lastEllipse)) {
         return;
       }
       const studyInstanceUid = studyInstanceUidFromAddress();
@@ -251,15 +342,18 @@ export function watchMeasurements({
                 change: MeasurementChange.AreaChanged,
                 area: result.area,
                 unit: result.unit,
+                ellipse,
               }
             : {
                 StudyInstanceUID: studyInstanceUid,
                 rowId: link.rowId,
                 change: MeasurementChange.AreaUnavailable,
+                ellipse,
               }
         )
       );
       link.last = result;
+      link.lastEllipse = ellipse;
     }
   );
 
