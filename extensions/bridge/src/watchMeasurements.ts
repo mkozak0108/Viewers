@@ -292,9 +292,8 @@ export function watchMeasurements({
     setActiveTool(ohifToolName(payload.tool, toolNames));
   };
 
-  // Puts saved ellipses back after a reload and links each to its row, so from then on it is
-  // exactly an ellipse drawn in this session. OHIF's own path for serialized measurements, the
-  // one its SR viewer hydrates with (005 research R5).
+  // Once linked, a restored ellipse is exactly one drawn in this session. addRawMeasurement is
+  // OHIF's own path for serialized measurements, the one its SR viewer hydrates with (005 R5).
   const restore = ({ StudyInstanceUID, measurements }: RestorePayload) => {
     const studyInstanceUid = studyInstanceUidFromAddress();
     // The one command checked against the study: it puts marks on a patient's images.
