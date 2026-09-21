@@ -3,12 +3,13 @@ import { log } from '@ohif/core';
 import { buildEvent } from './buildMessages';
 import {
   BridgeCommand,
+  type BridgeCommandMessage,
   BridgeEvent,
   BridgeMessageType,
   BridgeSource,
   BridgeTool,
   BridgeVersion,
-  type CommandMessage,
+  type CommandPayloads,
   type EllipseGeometry,
   MeasurementChange,
   type Point3,
@@ -31,18 +32,25 @@ enum OhifModule {
   CornerstoneTools = '@ohif/extension-cornerstone.utilityModule.tools',
 }
 
+// Must match the fork's extensions/cornerstone/src/enums.ts.
+enum OhifMeasurementSource {
+  Name = 'Cornerstone3DTools',
+  Version = '0.1',
+}
+
 const MAX_ROW_ID_LENGTH = 64;
+const MAX_IMAGE_ID_LENGTH = 512;
+// DICOM caps a UID at 64 characters.
+const MAX_UID_LENGTH = 64;
+const MAX_RESTORED_MEASUREMENTS = 100;
 const HOST_ORIGINS: readonly string[] = Object.values(HostOrigin);
 const BRIDGE_TOOLS: readonly unknown[] = Object.values(BridgeTool);
-// RESTORE_MEASUREMENTS is not handled yet, so it fails the check like any unknown command.
-const TOOL_COMMANDS: readonly unknown[] = [
-  BridgeCommand.ActivateTool,
-  BridgeCommand.DeactivateTool,
-];
+const BRIDGE_COMMANDS: readonly unknown[] = Object.values(BridgeCommand);
 
-type ToolCommandMessage =
-  | CommandMessage<BridgeCommand.ActivateTool>
-  | CommandMessage<BridgeCommand.DeactivateTool>;
+type RestorePayload = CommandPayloads[BridgeCommand.RestoreMeasurements];
+
+// OHIF leaves its measurement mappings untyped, so the two fields read here are named.
+type OhifMeasurementMapping = { annotationType: string; toMeasurementSchema: unknown };
 
 type ToolNames = Record<string, string>;
 
@@ -74,25 +82,55 @@ export type WatchMeasurementsParams = {
   extensionManager: AppTypes.ExtensionManager;
 };
 
+function isRowId(value: unknown): value is string {
+  return isNonEmptyString(value) && value.length <= MAX_ROW_ID_LENGTH;
+}
+
+// The same limits as the host's check, so the viewer never sends what the host would refuse.
+function isEllipseGeometry(value: unknown): value is EllipseGeometry {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.referencedImageId) &&
+    value.referencedImageId.length <= MAX_IMAGE_ID_LENGTH &&
+    isNonEmptyString(value.FrameOfReferenceUID) &&
+    value.FrameOfReferenceUID.length <= MAX_UID_LENGTH &&
+    toPoint3(value.viewPlaneNormal) !== undefined &&
+    toPoint3(value.viewUp) !== undefined &&
+    Array.isArray(value.points) &&
+    value.points.length === 4 &&
+    value.points.every(point => toPoint3(point) !== undefined)
+  );
+}
+
 /** Message data is untrusted input: this is the runtime check, the types are not. */
-function isToolCommandMessage(data: unknown): data is ToolCommandMessage {
+function isBridgeCommandMessage(data: unknown): data is BridgeCommandMessage {
   if (
     !isRecord(data) ||
     data.source !== BridgeSource.Host ||
     data.type !== BridgeMessageType.Command ||
-    !TOOL_COMMANDS.includes(data.command)
+    !BRIDGE_COMMANDS.includes(data.command) ||
+    !isRecord(data.payload)
   ) {
     return false;
   }
   const { payload } = data;
-  if (
-    !isRecord(payload) ||
-    !isNonEmptyString(payload.rowId) ||
-    payload.rowId.length > MAX_ROW_ID_LENGTH
-  ) {
-    return false;
+  switch (data.command) {
+    case BridgeCommand.ActivateTool:
+      return isRowId(payload.rowId) && BRIDGE_TOOLS.includes(payload.tool);
+    case BridgeCommand.DeactivateTool:
+      return isRowId(payload.rowId);
+    case BridgeCommand.RestoreMeasurements:
+      return (
+        isNonEmptyString(payload.StudyInstanceUID) &&
+        Array.isArray(payload.measurements) &&
+        payload.measurements.length <= MAX_RESTORED_MEASUREMENTS &&
+        payload.measurements.every(
+          entry => isRecord(entry) && isRowId(entry.rowId) && isEllipseGeometry(entry.ellipse)
+        )
+      );
+    default:
+      return false;
   }
-  return data.command === BridgeCommand.ActivateTool ? BRIDGE_TOOLS.includes(payload.tool) : true;
 }
 
 // Exhaustive on purpose: a new BridgeTool without an OHIF tool name is a compile error.
@@ -143,25 +181,14 @@ function ellipseOf(measurement: MeasurementEvent['measurement']): EllipseGeometr
   const viewPlaneNormal = toPoint3(metadata.viewPlaneNormal);
   const viewUp = toPoint3(metadata.viewUp);
   const [bottom, top, left, right] = points.map(toPoint3);
-  if (
-    !isNonEmptyString(referencedImageId) ||
-    !isNonEmptyString(FrameOfReferenceUID) ||
-    !viewPlaneNormal ||
-    !viewUp ||
-    !bottom ||
-    !top ||
-    !left ||
-    !right
-  ) {
-    return undefined;
-  }
-  return {
+  const ellipse = {
     referencedImageId,
     FrameOfReferenceUID,
     viewPlaneNormal,
     viewUp,
     points: [bottom, top, left, right],
   };
+  return isEllipseGeometry(ellipse) ? ellipse : undefined;
 }
 
 function isSamePoint(a: Point3, b: Point3): boolean {
@@ -230,12 +257,16 @@ export function watchMeasurements({
       log.warn('[bridge] ignored a host message: unsupported version');
       return;
     }
-    if (!isToolCommandMessage(event.data)) {
+    if (!isBridgeCommandMessage(event.data)) {
       log.warn('[bridge] ignored a host message: unexpected shape');
       return;
     }
 
     const { command, payload } = event.data;
+    if (command === BridgeCommand.RestoreMeasurements) {
+      restore(payload);
+      return;
+    }
     if (command === BridgeCommand.DeactivateTool) {
       // Ignored unless it names the pending row: a late cancel for a row the host has already
       // replaced must not switch off the newer activation (research R7).
@@ -259,6 +290,76 @@ export function watchMeasurements({
       return;
     }
     setActiveTool(ohifToolName(payload.tool, toolNames));
+  };
+
+  // Puts saved ellipses back after a reload and links each to its row, so from then on it is
+  // exactly an ellipse drawn in this session. OHIF's own path for serialized measurements, the
+  // one its SR viewer hydrates with (005 research R5).
+  const restore = ({ StudyInstanceUID, measurements }: RestorePayload) => {
+    const studyInstanceUid = studyInstanceUidFromAddress();
+    // The one command checked against the study: it puts marks on a patient's images.
+    if (!studyInstanceUid || StudyInstanceUID !== studyInstanceUid) {
+      log.warn('[bridge] ignored a restore for another study');
+      return;
+    }
+    const toolNames = getToolNames();
+    const source = measurementService.getSource(
+      OhifMeasurementSource.Name,
+      OhifMeasurementSource.Version
+    );
+    const mapping = (
+      measurementService.getSourceMappings(
+        OhifMeasurementSource.Name,
+        OhifMeasurementSource.Version
+      ) as OhifMeasurementMapping[] | undefined
+    )?.find(candidate => candidate.annotationType === toolNames?.EllipticalROI);
+    if (!toolNames || !source || !mapping) {
+      log.warn(
+        '[bridge] cannot restore measurements: the cornerstone measurement source is missing'
+      );
+      return;
+    }
+    for (const { rowId, ellipse } of measurements) {
+      // Fresh arrays: OHIF keeps the ones it is given and cornerstone moves an ellipse by changing
+      // them in place, which would also change lastEllipse and hide every move from the host.
+      const annotation = {
+        metadata: {
+          toolName: toolNames.EllipticalROI,
+          referencedImageId: ellipse.referencedImageId,
+          FrameOfReferenceUID: ellipse.FrameOfReferenceUID,
+          viewPlaneNormal: [...ellipse.viewPlaneNormal],
+          viewUp: [...ellipse.viewUp],
+        },
+        data: {
+          // A new annotation starts with no active handle. The renderer reads anything but null
+          // as a handle index, so leaving it undefined makes it throw on the first draw.
+          handles: { points: ellipse.points.map(point => [...point]), activeHandleIndex: null },
+          cachedStats: {},
+          label: '',
+        },
+      };
+      const uid: unknown = measurementService.addRawMeasurement(
+        source,
+        toolNames.EllipticalROI,
+        { annotation },
+        mapping.toMeasurementSchema
+      );
+      if (typeof uid !== 'string') {
+        // In practice its image is not in this study, so OHIF's mapping fails (005 research R13).
+        log.warn('[bridge] a saved ellipse could not be put back');
+        postToHost(
+          buildEvent(BridgeEvent.MeasurementRestoreFailed, {
+            StudyInstanceUID: studyInstanceUid,
+            rowId,
+          })
+        );
+        continue;
+      }
+      // No area yet: cornerstone computes it at the next render and reports it as an update.
+      links.set(uid, { rowId, last: undefined, lastEllipse: ellipse });
+    }
+    // OHIF's raw-measurement path adds the annotation without drawing it.
+    servicesManager.services.cornerstoneViewportService.getRenderingEngine()?.render();
   };
 
   const addedSubscription = measurementService.subscribe(
