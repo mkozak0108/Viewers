@@ -3,14 +3,7 @@
  * app (its parent window), in both directions. The scoring app imports it as `@bridge-contract`
  * through the submodule, so change it through a fork PR, then bump the submodule in the parent
  * repo. Every message carries `version`: the two apps ship separately, and a receiver that
- * can't tell versions apart would misread a changed payload without any error. The rules are in
- * specs/003-add-area-measurements/contracts/bridge-messages.md and, for the measurement changes,
- * specs/004-live-measurement-update/contracts/bridge-messages.md and
- * specs/005-restore-state-on-reload/contracts/bridge-messages.md. MEASUREMENT_REMOVED is named
- * after the viewer's own removal event, so the two sides read the same way. RESTORE_MEASUREMENTS
- * is the one command that names a study, because it is the one that puts marks on the images.
- *
- * No imports: two toolchains compile this file, this fork's babel and the scoring app's Vite.
+ * can't tell versions apart would misread a changed payload without any error.
  */
 
 /** Both apps put the study in their address under this name, as OHIF's viewer route expects. */
@@ -64,16 +57,11 @@ type ForStudy<Fields = unknown> = { StudyInstanceUID: string } & Fields;
 
 export type Point3 = [number, number, number];
 
-/**
- * What it takes to draw the same ellipse again. No area: the viewer computes that from the
- * points, so a stored area could only ever disagree with them.
- */
 export type EllipseGeometry = {
   referencedImageId: string;
   FrameOfReferenceUID: string;
   viewPlaneNormal: Point3;
   viewUp: Point3;
-  /** Bottom, top, left, right, in world coordinates. */
   points: [Point3, Point3, Point3, Point3];
 };
 
