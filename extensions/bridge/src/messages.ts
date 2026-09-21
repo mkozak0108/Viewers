@@ -3,12 +3,7 @@
  * app (its parent window), in both directions. The scoring app imports it as `@bridge-contract`
  * through the submodule, so change it through a fork PR, then bump the submodule in the parent
  * repo. Every message carries `version`: the two apps ship separately, and a receiver that
- * can't tell versions apart would misread a changed payload without any error. The rules are in
- * specs/003-add-area-measurements/contracts/bridge-messages.md and, for the measurement changes,
- * specs/004-live-measurement-update/contracts/bridge-messages.md. MEASUREMENT_REMOVED is named
- * after the viewer's own removal event, so the two sides read the same way.
- *
- * No imports: two toolchains compile this file, this fork's babel and the scoring app's Vite.
+ * can't tell versions apart would misread a changed payload without any error.
  */
 
 /** Both apps put the study in their address under this name, as OHIF's viewer route expects. */
@@ -35,11 +30,13 @@ export enum BridgeEvent {
   MeasurementAdded = 'MEASUREMENT_ADDED',
   MeasurementUpdated = 'MEASUREMENT_UPDATED',
   MeasurementRemoved = 'MEASUREMENT_REMOVED',
+  MeasurementRestoreFailed = 'MEASUREMENT_RESTORE_FAILED',
 }
 
 export enum BridgeCommand {
   ActivateTool = 'ACTIVATE_TOOL',
   DeactivateTool = 'DEACTIVATE_TOOL',
+  RestoreMeasurements = 'RESTORE_MEASUREMENTS',
 }
 
 export enum BridgeTool {
@@ -58,6 +55,16 @@ export enum MeasurementChange {
 
 type ForStudy<Fields = unknown> = { StudyInstanceUID: string } & Fields;
 
+export type Point3 = [number, number, number];
+
+export type EllipseGeometry = {
+  referencedImageId: string;
+  FrameOfReferenceUID: string;
+  viewPlaneNormal: Point3;
+  viewUp: Point3;
+  points: [Point3, Point3, Point3, Point3];
+};
+
 type MeasurementUpdate =
   | { change: MeasurementChange.AreaChanged; area: number; unit: string }
   | { change: MeasurementChange.AreaUnavailable };
@@ -67,14 +74,25 @@ export type EventPayloads = {
   [BridgeEvent.StudyLoaded]: ForStudy;
   [BridgeEvent.StudyLoadFailed]: ForStudy<{ reason: StudyLoadFailureReason }>;
   [BridgeEvent.ViewerReady]: ForStudy;
-  [BridgeEvent.MeasurementAdded]: ForStudy<{ rowId: string; area: number; unit: string }>;
-  [BridgeEvent.MeasurementUpdated]: ForStudy<{ rowId: string } & MeasurementUpdate>;
+  [BridgeEvent.MeasurementAdded]: ForStudy<{
+    rowId: string;
+    area: number;
+    unit: string;
+    ellipse: EllipseGeometry;
+  }>;
+  [BridgeEvent.MeasurementUpdated]: ForStudy<
+    { rowId: string; ellipse: EllipseGeometry } & MeasurementUpdate
+  >;
   [BridgeEvent.MeasurementRemoved]: ForStudy<{ rowId: string }>;
+  [BridgeEvent.MeasurementRestoreFailed]: ForStudy<{ rowId: string }>;
 };
 
 export type CommandPayloads = {
   [BridgeCommand.ActivateTool]: { rowId: string; tool: BridgeTool };
   [BridgeCommand.DeactivateTool]: { rowId: string };
+  [BridgeCommand.RestoreMeasurements]: ForStudy<{
+    measurements: { rowId: string; ellipse: EllipseGeometry }[];
+  }>;
 };
 
 export type EventMessage<E extends keyof EventPayloads> = {

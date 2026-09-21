@@ -1,4 +1,5 @@
 import { log } from '@ohif/core';
+import { Enums as CornerstoneExtensionEnums } from '@ohif/extension-cornerstone';
 
 import { buildEvent } from './buildMessages';
 import {
@@ -9,11 +10,14 @@ import {
   BridgeSource,
   BridgeTool,
   BridgeVersion,
+  type CommandPayloads,
+  type EllipseGeometry,
   MeasurementChange,
   STUDY_UIDS_PARAM,
 } from './messages';
 import { HostOrigin, postToHost } from './postToHost';
-import { isNonEmptyString, isRecord } from './utils/guards';
+import { ellipseOf, isSameEllipse } from './utils/geometry';
+import { isEllipseGeometry, isNonEmptyString, isRecord } from './utils/guards';
 
 // OHIF's own identifiers: they must match the fork's cornerstone `commandsModule.ts` and the
 // module ids its extension registers.
@@ -29,24 +33,35 @@ enum OhifModule {
   CornerstoneTools = '@ohif/extension-cornerstone.utilityModule.tools',
 }
 
+const { CORNERSTONE_3D_TOOLS_SOURCE_NAME, CORNERSTONE_3D_TOOLS_SOURCE_VERSION } =
+  CornerstoneExtensionEnums;
+
 const MAX_ROW_ID_LENGTH = 64;
+const MAX_RESTORED_MEASUREMENTS = 100;
 const HOST_ORIGINS: readonly string[] = Object.values(HostOrigin);
 const BRIDGE_TOOLS: readonly unknown[] = Object.values(BridgeTool);
-const BRIDGE_COMMANDS: readonly unknown[] = Object.values(BridgeCommand);
+
+type RestorePayload = CommandPayloads[BridgeCommand.RestoreMeasurements];
+
+type OhifMeasurementMapping = { annotationType: string; toMeasurementSchema: unknown };
 
 type ToolNames = Record<string, string>;
 
 type MeasurementStats = Record<string, { area?: unknown; areaUnit?: unknown }>;
 
-// OHIF's measurement uid is the annotation's uid, the same in ADDED, UPDATED and REMOVED.
 type MeasurementEvent = {
-  measurement: { uid: string; toolName: string; data: MeasurementStats };
+  measurement: {
+    uid: string;
+    toolName: string;
+    data: MeasurementStats;
+    points?: unknown;
+    metadata?: unknown;
+  };
 };
 
 type Area = { area: number; unit: string };
 
-/** `last` is what the host was last told; `undefined` means the area was unavailable. */
-type Link = { rowId: string; last: Area | undefined };
+type Link = { rowId: string; last: Area | undefined; lastEllipse: EllipseGeometry };
 
 export type WatchMeasurementsParams = {
   servicesManager: AppTypes.ServicesManager;
@@ -54,25 +69,38 @@ export type WatchMeasurementsParams = {
   extensionManager: AppTypes.ExtensionManager;
 };
 
+function isRowId(value: unknown): value is string {
+  return isNonEmptyString(value) && value.length <= MAX_ROW_ID_LENGTH;
+}
+
 /** Message data is untrusted input: this is the runtime check, the types are not. */
 function isBridgeCommandMessage(data: unknown): data is BridgeCommandMessage {
   if (
     !isRecord(data) ||
     data.source !== BridgeSource.Host ||
     data.type !== BridgeMessageType.Command ||
-    !BRIDGE_COMMANDS.includes(data.command)
+    !isRecord(data.payload)
   ) {
     return false;
   }
   const { payload } = data;
-  if (
-    !isRecord(payload) ||
-    !isNonEmptyString(payload.rowId) ||
-    payload.rowId.length > MAX_ROW_ID_LENGTH
-  ) {
-    return false;
+  switch (data.command) {
+    case BridgeCommand.ActivateTool:
+      return isRowId(payload.rowId) && BRIDGE_TOOLS.includes(payload.tool);
+    case BridgeCommand.DeactivateTool:
+      return isRowId(payload.rowId);
+    case BridgeCommand.RestoreMeasurements:
+      return (
+        isNonEmptyString(payload.StudyInstanceUID) &&
+        Array.isArray(payload.measurements) &&
+        payload.measurements.length <= MAX_RESTORED_MEASUREMENTS &&
+        payload.measurements.every(
+          entry => isRecord(entry) && isRowId(entry.rowId) && isEllipseGeometry(entry.ellipse)
+        )
+      );
+    default:
+      return false;
   }
-  return data.command === BridgeCommand.ActivateTool ? BRIDGE_TOOLS.includes(payload.tool) : true;
 }
 
 // Exhaustive on purpose: a new BridgeTool without an OHIF tool name is a compile error.
@@ -159,6 +187,10 @@ export function watchMeasurements({
     }
 
     const { command, payload } = event.data;
+    if (command === BridgeCommand.RestoreMeasurements) {
+      restore(payload);
+      return;
+    }
     if (command === BridgeCommand.DeactivateTool) {
       // Ignored unless it names the pending row: a late cancel for a row the host has already
       // replaced must not switch off the newer activation (research R7).
@@ -184,6 +216,61 @@ export function watchMeasurements({
     setActiveTool(ohifToolName(payload.tool, toolNames));
   };
 
+  const restore = ({ StudyInstanceUID, measurements }: RestorePayload) => {
+    const studyInstanceUid = studyInstanceUidFromAddress();
+    if (!studyInstanceUid || StudyInstanceUID !== studyInstanceUid) {
+      log.warn('[bridge] ignored a restore for another study');
+      return;
+    }
+    const toolNames = getToolNames();
+    const source = measurementService.getSource(
+      CORNERSTONE_3D_TOOLS_SOURCE_NAME,
+      CORNERSTONE_3D_TOOLS_SOURCE_VERSION
+    );
+    const mapping = (
+      measurementService.getSourceMappings(
+        CORNERSTONE_3D_TOOLS_SOURCE_NAME,
+        CORNERSTONE_3D_TOOLS_SOURCE_VERSION
+      ) as OhifMeasurementMapping[] | undefined
+    )?.find(candidate => candidate.annotationType === toolNames?.EllipticalROI);
+    if (!toolNames || !source || !mapping) {
+      log.warn(
+        '[bridge] cannot restore measurements: the cornerstone measurement source is missing'
+      );
+      return;
+    }
+    for (const { rowId, ellipse } of measurements) {
+      const { points, ...metadata } = structuredClone(ellipse);
+      const annotation = {
+        metadata: { toolName: toolNames.EllipticalROI, ...metadata },
+        data: {
+          // Left undefined, cornerstone's renderer reads it as a handle index and throws.
+          handles: { points, activeHandleIndex: null },
+          cachedStats: {},
+          label: '',
+        },
+      };
+      const uid: unknown = measurementService.addRawMeasurement(
+        source,
+        toolNames.EllipticalROI,
+        { annotation },
+        mapping.toMeasurementSchema
+      );
+      if (typeof uid !== 'string') {
+        log.warn('[bridge] a saved ellipse could not be put back');
+        postToHost(
+          buildEvent(BridgeEvent.MeasurementRestoreFailed, {
+            StudyInstanceUID: studyInstanceUid,
+            rowId,
+          })
+        );
+        continue;
+      }
+      links.set(uid, { rowId, last: undefined, lastEllipse: ellipse });
+    }
+    servicesManager.services.cornerstoneViewportService.getRenderingEngine()?.render();
+  };
+
   const addedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_ADDED,
     ({ measurement }: MeasurementEvent) => {
@@ -201,6 +288,11 @@ export function watchMeasurements({
         log.error('[bridge] the finished ellipse has no area; nothing was sent');
         return;
       }
+      const ellipse = ellipseOf(measurement);
+      if (!ellipse) {
+        log.warn('[bridge] the finished ellipse has no usable geometry; nothing was sent');
+        return;
+      }
       const studyInstanceUid = studyInstanceUidFromAddress();
       if (!studyInstanceUid) {
         return;
@@ -212,9 +304,10 @@ export function watchMeasurements({
           rowId,
           area: result.area,
           unit: result.unit,
+          ellipse,
         })
       );
-      links.set(measurement.uid, { rowId, last: result });
+      links.set(measurement.uid, { rowId, last: result, lastEllipse: ellipse });
       pendingRowId = undefined;
       setActiveTool(toolNames.Pan);
     }
@@ -232,9 +325,13 @@ export function watchMeasurements({
         return;
       }
       const result = firstArea(measurement.data);
-      // Most of these events repeat the last area (a handle move before the stats are recomputed,
-      // selection, lock, visibility), and the message means "it changed".
-      if (isSameArea(result, link.last)) {
+      const ellipse = ellipseOf(measurement);
+      if (!ellipse) {
+        log.warn('[bridge] an ellipse changed but has no usable geometry; nothing was sent');
+        return;
+      }
+      // Selection, lock and visibility changes repeat the last area and shape.
+      if (isSameArea(result, link.last) && isSameEllipse(ellipse, link.lastEllipse)) {
         return;
       }
       const studyInstanceUid = studyInstanceUidFromAddress();
@@ -251,15 +348,18 @@ export function watchMeasurements({
                 change: MeasurementChange.AreaChanged,
                 area: result.area,
                 unit: result.unit,
+                ellipse,
               }
             : {
                 StudyInstanceUID: studyInstanceUid,
                 rowId: link.rowId,
                 change: MeasurementChange.AreaUnavailable,
+                ellipse,
               }
         )
       );
       link.last = result;
+      link.lastEllipse = ellipse;
     }
   );
 

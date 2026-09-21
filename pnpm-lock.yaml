@@ -231,6 +231,9 @@ importers:
       '@ohif/core':
         specifier: workspace:*
         version: link:../../platform/core
+      '@ohif/extension-cornerstone':
+        specifier: workspace:*
+        version: link:../cornerstone
 
   extensions/cornerstone:
     dependencies:

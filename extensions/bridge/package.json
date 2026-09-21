@@ -19,6 +19,7 @@
   },
   "peerDependencies": {
     "@ohif/core": "workspace:*",
+    "@ohif/extension-cornerstone": "workspace:*",
     "@cornerstonejs/core": "5.10.3"
   }
 }
