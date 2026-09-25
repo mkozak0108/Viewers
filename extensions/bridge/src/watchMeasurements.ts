@@ -150,7 +150,12 @@ export function watchMeasurements({
   commandsManager,
   extensionManager,
 }: WatchMeasurementsParams): () => void {
-  const { measurementService } = servicesManager.services;
+  const { measurementService, cornerstoneViewportService } = servicesManager.services;
+  // OHIF types every service as optional.
+  if (!measurementService) {
+    log.warn('[bridge] cannot watch measurements: the measurement service is missing');
+    return () => {};
+  }
   let pendingRowId: string | undefined;
   // Measurement uid → the row its ellipse was drawn for. The uid never goes on the wire, so the
   // host keeps knowing rows only by the ids it made.
@@ -268,7 +273,7 @@ export function watchMeasurements({
       }
       links.set(uid, { rowId, last: undefined, lastEllipse: ellipse });
     }
-    servicesManager.services.cornerstoneViewportService.getRenderingEngine()?.render();
+    cornerstoneViewportService?.getRenderingEngine()?.render();
   };
 
   const addedSubscription = measurementService.subscribe(
