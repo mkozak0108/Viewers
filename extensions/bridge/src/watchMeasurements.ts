@@ -111,6 +111,15 @@ function ohifToolName(tool: BridgeTool, toolNames: ToolNames): string {
   return names[tool];
 }
 
+function isMeasurementEvent(data: unknown): data is MeasurementEvent {
+  return (
+    isRecord(data) &&
+    isRecord(data.measurement) &&
+    typeof data.measurement.uid === 'string' &&
+    typeof data.measurement.toolName === 'string'
+  );
+}
+
 function firstArea(data: MeasurementStats): Area | undefined {
   for (const stats of Object.values(data ?? {})) {
     if (
@@ -278,7 +287,12 @@ export function watchMeasurements({
 
   const addedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_ADDED,
-    ({ measurement }: MeasurementEvent) => {
+    (data: unknown) => {
+      if (!isMeasurementEvent(data)) {
+        log.warn('[bridge] an added measurement came in an unexpected shape; nothing was sent');
+        return;
+      }
+      const { measurement } = data;
       const toolNames = getToolNames();
       // With nothing pending this is a drawing from the viewer's own toolbar.
       if (pendingRowId === undefined || !toolNames) {
@@ -322,7 +336,12 @@ export function watchMeasurements({
   // and once more after it stops, which is both the live pace and the final value (research R1).
   const updatedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_UPDATED,
-    ({ measurement }: MeasurementEvent) => {
+    (data: unknown) => {
+      if (!isMeasurementEvent(data)) {
+        log.warn('[bridge] an updated measurement came in an unexpected shape; nothing was sent');
+        return;
+      }
+      const { measurement } = data;
       // Also fired from mouse-down and throughout the first drawing of a new ellipse, and for
       // ellipses drawn from the viewer's own toolbar: none of those belongs to a row yet.
       const link = links.get(measurement.uid);
@@ -390,7 +409,8 @@ export function watchMeasurements({
   // onModeExit, which unsubscribes these, runs before the services'; on enter there are no links.
   const removedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENT_REMOVED,
-    ({ measurement: uid }: { measurement: unknown }) => {
+    (data: unknown) => {
+      const uid = isRecord(data) ? data.measurement : undefined;
       if (typeof uid !== 'string') {
         log.warn('[bridge] a removed measurement came without its uid; nothing was sent');
         return;
@@ -402,7 +422,8 @@ export function watchMeasurements({
   // A bulk delete fires only this, with no MEASUREMENT_REMOVED per measurement.
   const clearedSubscription = measurementService.subscribe(
     measurementService.EVENTS.MEASUREMENTS_CLEARED,
-    ({ measurements }: { measurements: unknown }) => {
+    (data: unknown) => {
+      const measurements = isRecord(data) ? data.measurements : undefined;
       if (!Array.isArray(measurements)) {
         log.warn('[bridge] cleared measurements came without a list; nothing was sent');
         return;
